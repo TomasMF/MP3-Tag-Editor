@@ -1,15 +1,24 @@
-import io
 import os
-import tkinter as tk
-from tkinter import filedialog, messagebox
 
-import customtkinter as ctk
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtGui import QColor, QFont, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 from mutagen.id3 import APIC, ID3, TALB, TIT2, TPE1, ID3NoHeaderError
-from PIL import Image
 
 
-# Light, modern palette
-COLORS = {
+LIGHT_COLORS = {
     "bg": "#F3F6FC",
     "card": "#FFFFFF",
     "text": "#1F2937",
@@ -21,12 +30,23 @@ COLORS = {
     "input_bg": "#F8FAFD",
     "input_border": "#DDE5F0",
     "preview_bg": "#F8FAFD",
+    "placeholder": "#9AA7B8",
 }
 
-
-def pick_resample():
-    # Pillow 10+ uses Image.Resampling.LANCZOS; older versions use Image.LANCZOS
-    return getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+DARK_COLORS = {
+    "bg": "#151A23",
+    "card": "#1E2530",
+    "text": "#E8EDF6",
+    "muted": "#9AA7BC",
+    "accent": "#6E9BFF",
+    "accent_hover": "#5A8BF0",
+    "secondary": "#263041",
+    "secondary_hover": "#314059",
+    "input_bg": "#141A24",
+    "input_border": "#39455A",
+    "preview_bg": "#141A24",
+    "placeholder": "#6C7A90",
+}
 
 
 def get_tag_text(tags, frame_id):
@@ -36,326 +56,345 @@ def get_tag_text(tags, frame_id):
     return ""
 
 
-class MP3TagEditor:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("MP3 Tag Editor")
-        self.root.geometry("980x700")  # slightly taller to avoid clipping
-        self.root.minsize(940, 660)
-        self.root.resizable(False, False)
-        self.root.configure(fg_color=COLORS["bg"])
+class MP3TagEditor(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("MP3 Tag Editor")
+        self.setFixedSize(980, 700)
+        self.setObjectName("appRoot")
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         self.mp3_path = ""
-        self.cover_path = ""  # newly selected image; empty means keep existing cover
-        self.preview_image = None
-        self.status_var = tk.StringVar(value="Select an MP3 file to get started.")
+        self.cover_path = ""
+        self.dark_mode = False
+        self._theme_progress = 0.0
+        self._theme_animation = None
 
         self._build_ui()
+        self._apply_theme()
+
+    def _get_theme_progress(self):
+        return self._theme_progress
+
+    def _set_theme_progress(self, value):
+        self._theme_progress = float(value)
+        self._apply_theme()
+
+    # Qt animates this property directly; every frame updates the stylesheet.
+    themeProgress = Property(float, _get_theme_progress, _set_theme_progress)
 
     def _build_ui(self):
-        container = ctk.CTkFrame(self.root, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=28, pady=28)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(28, 28, 28, 28)
+        root_layout.setSpacing(0)
 
-        # Header
-        header = ctk.CTkFrame(container, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 22))
+        header = QHBoxLayout()
+        header.setSpacing(16)
+        heading_box = QVBoxLayout()
+        heading_box.setSpacing(4)
 
-        ctk.CTkLabel(
-            header,
-            text="MP3 Tag Editor",
-            font=ctk.CTkFont(family="Segoe UI", size=30, weight="bold"),
-            text_color=COLORS["text"],
-        ).pack(anchor="w")
-
-        ctk.CTkLabel(
-            header,
-            text="Update song details and cover art with a simple, clean interface.",
-            font=ctk.CTkFont(family="Segoe UI", size=14),
-            text_color=COLORS["muted"],
-        ).pack(anchor="w", pady=(4, 0))
-
-        # Bottom bar: pack before content so it always keeps its space
-        bottom = ctk.CTkFrame(container, fg_color="transparent")
-        bottom.pack(side="bottom", fill="x", pady=(22, 0))
-
-        self.status_label = ctk.CTkLabel(
-            bottom,
-            textvariable=self.status_var,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color=COLORS["muted"],
+        title = QLabel("MP3 Tag Editor")
+        title.setFont(QFont("Segoe UI", 22, QFont.Bold))
+        subtitle = QLabel(
+            "Update song details and cover art with a simple, clean interface."
         )
-        self.status_label.pack(side="left")
+        subtitle.setFont(QFont("Segoe UI", 10))
+        subtitle.setObjectName("muted")
+        heading_box.addWidget(title)
+        heading_box.addWidget(subtitle)
+        header.addLayout(heading_box, 1)
 
-        ctk.CTkButton(
-            bottom,
-            text="Save Metadata",
-            command=self.save,
-            width=170,
-            height=44,
-            corner_radius=14,
-            border_width=0,
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            text_color="white",
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-        ).pack(side="right")
+        self.theme_button = QPushButton("Dark Mode")
+        self.theme_button.setObjectName("secondary")
+        self.theme_button.setFixedSize(130, 36)
+        self.theme_button.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.theme_button.clicked.connect(self.toggle_theme)
+        header.addWidget(self.theme_button, 0, Qt.AlignTop)
+        root_layout.addLayout(header)
+        root_layout.addSpacing(22)
 
-        # Content area
-        content = ctk.CTkFrame(container, fg_color="transparent")
-        content.pack(fill="both", expand=True)
+        content = QHBoxLayout()
+        content.setSpacing(18)
 
-        # Left card: file + metadata
-        left_card = ctk.CTkFrame(
-            content,
-            fg_color=COLORS["card"],
-            corner_radius=24,
-            border_width=0,
-        )
-        left_card.pack(side="left", fill="both", expand=True, padx=(0, 18))
+        left_card = QFrame()
+        left_card.setObjectName("card")
+        left_layout = QVBoxLayout(left_card)
+        left_layout.setContentsMargins(28, 28, 28, 28)
+        left_layout.setSpacing(0)
 
-        left_inner = ctk.CTkFrame(left_card, fg_color="transparent")
-        left_inner.pack(fill="both", expand=True, padx=28, pady=28)
+        details = QLabel("Track details")
+        details.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        left_layout.addWidget(details)
+        left_layout.addSpacing(18)
 
-        ctk.CTkLabel(
-            left_inner,
-            text="Track details",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
-            text_color=COLORS["text"],
-        ).pack(anchor="w", pady=(0, 18))
+        mp3_row = QHBoxLayout()
+        mp3_row.setSpacing(14)
+        choose_mp3 = QPushButton("Choose MP3")
+        choose_mp3.setObjectName("secondary")
+        choose_mp3.setFixedSize(140, 40)
+        choose_mp3.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        choose_mp3.clicked.connect(self.choose_mp3)
+        self.mp3_label = QLabel("No file selected")
+        self.mp3_label.setObjectName("muted")
+        self.mp3_label.setFont(QFont("Segoe UI", 10))
+        mp3_row.addWidget(choose_mp3)
+        mp3_row.addWidget(self.mp3_label, 1)
+        left_layout.addLayout(mp3_row)
+        left_layout.addSpacing(20)
 
-        # MP3 picker row
-        mp3_row = ctk.CTkFrame(left_inner, fg_color="transparent")
-        mp3_row.pack(fill="x", pady=(0, 20))
-
-        ctk.CTkButton(
-            mp3_row,
-            text="Choose MP3",
-            command=self.choose_mp3,
-            width=140,
-            height=40,
-            corner_radius=12,
-            border_width=0,
-            fg_color=COLORS["secondary"],
-            hover_color=COLORS["secondary_hover"],
-            text_color=COLORS["accent"],
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-        ).pack(side="left")
-
-        self.mp3_label = ctk.CTkLabel(
-            mp3_row,
-            text="No file selected",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color=COLORS["muted"],
-            anchor="w",
-        )
-        self.mp3_label.pack(side="left", padx=(14, 0), fill="x", expand=True)
-
-        # Metadata fields
         self.entries = {}
-        fields = [
+        for label_text, key, placeholder in (
             ("Title", "title", "Enter song title"),
             ("Artist", "artist", "Enter artist name"),
             ("Album", "album", "Enter album name"),
-        ]
-        for label, key, placeholder in fields:
-            ctk.CTkLabel(
-                left_inner,
-                text=label,
-                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-                text_color=COLORS["muted"],
-            ).pack(anchor="w", pady=(0, 6))
+        ):
+            field_label = QLabel(label_text)
+            field_label.setObjectName("muted")
+            field_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            left_layout.addWidget(field_label)
+            left_layout.addSpacing(6)
 
-            entry = ctk.CTkEntry(
-                left_inner,
-                height=44,
-                corner_radius=12,
-                border_width=1,
-                border_color=COLORS["input_border"],
-                fg_color=COLORS["input_bg"],
-                text_color=COLORS["text"],
-                placeholder_text=placeholder,
-                placeholder_text_color="#9AA7B8",
-                font=ctk.CTkFont(family="Segoe UI", size=13),
-            )
-            entry.pack(fill="x", pady=(0, 16))
+            entry = QLineEdit()
+            entry.setPlaceholderText(placeholder)
+            entry.setFixedHeight(44)
+            entry.setFont(QFont("Segoe UI", 10))
+            left_layout.addWidget(entry)
+            left_layout.addSpacing(16)
             self.entries[key] = entry
 
-        # Image picker row
-        image_row = ctk.CTkFrame(left_inner, fg_color="transparent")
-        image_row.pack(fill="x", pady=(4, 0))
+        image_row = QHBoxLayout()
+        image_row.setSpacing(14)
+        self.choose_image_btn = QPushButton("Choose Image")
+        self.choose_image_btn.setObjectName("secondary")
+        self.choose_image_btn.setFixedSize(140, 40)
+        self.choose_image_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.choose_image_btn.setEnabled(False)
+        self.choose_image_btn.clicked.connect(self.choose_image)
+        self.cover_label = QLabel("Cover unchanged on save")
+        self.cover_label.setObjectName("muted")
+        self.cover_label.setFont(QFont("Segoe UI", 10))
+        image_row.addWidget(self.choose_image_btn)
+        image_row.addWidget(self.cover_label, 1)
+        left_layout.addLayout(image_row)
+        left_layout.addStretch(1)
 
-        self.choose_image_btn = ctk.CTkButton(
-            image_row,
-            text="Choose Image",
-            command=self.choose_image,
-            width=140,
-            height=40,
-            corner_radius=12,
-            border_width=0,
-            fg_color=COLORS["secondary"],
-            hover_color=COLORS["secondary_hover"],
-            text_color=COLORS["accent"],
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            state="disabled",  # disabled until an MP3 is selected
+        content.addWidget(left_card, 1)
+
+        right_card = QFrame()
+        right_card.setObjectName("card")
+        right_card.setFixedWidth(320)
+        right_layout = QVBoxLayout(right_card)
+        right_layout.setContentsMargins(28, 28, 28, 28)
+        right_layout.setSpacing(0)
+
+        cover_heading = QLabel("Cover art")
+        cover_heading.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        right_layout.addWidget(cover_heading)
+
+        cover_hint = QLabel("Preview the image before saving it to the MP3.")
+        cover_hint.setObjectName("muted")
+        cover_hint.setFont(QFont("Segoe UI", 10))
+        cover_hint.setWordWrap(True)
+        right_layout.addSpacing(6)
+        right_layout.addWidget(cover_hint)
+        right_layout.addSpacing(18)
+
+        self.preview_box = QLabel()
+        self.preview_box.setObjectName("previewBox")
+        self.preview_box.setFixedSize(260, 260)
+        self.preview_box.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(self.preview_box, 0, Qt.AlignHCenter)
+
+        self.preview_hint = QLabel(
+            "Existing cover art will appear here when you load an MP3."
         )
-        self.choose_image_btn.pack(side="left")
+        self.preview_hint.setObjectName("muted")
+        self.preview_hint.setFont(QFont("Segoe UI", 9))
+        self.preview_hint.setWordWrap(True)
+        right_layout.addSpacing(14)
+        right_layout.addWidget(self.preview_hint)
+        right_layout.addStretch(1)
 
-        self.cover_label = ctk.CTkLabel(
-            image_row,
-            text="Cover unchanged on save",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color=COLORS["muted"],
-            anchor="w",
+        content.addWidget(right_card, 0)
+        root_layout.addLayout(content, 1)
+        root_layout.addSpacing(22)
+
+        bottom = QHBoxLayout()
+        self.status_label = QLabel("Select an MP3 file to get started.")
+        self.status_label.setObjectName("muted")
+        self.status_label.setFont(QFont("Segoe UI", 9))
+        save_button = QPushButton("Save Metadata")
+        save_button.setObjectName("primary")
+        save_button.setFixedSize(170, 44)
+        save_button.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        save_button.clicked.connect(self.save)
+        bottom.addWidget(self.status_label, 1)
+        bottom.addWidget(save_button)
+        root_layout.addLayout(bottom)
+
+        self.set_preview(None)
+
+    def _interpolated_colors(self):
+        t = self._theme_progress
+        colors = {}
+        for key, light in LIGHT_COLORS.items():
+            dark = DARK_COLORS[key]
+            a = QColor(light)
+            b = QColor(dark)
+            blended = QColor(
+                round(a.red() + (b.red() - a.red()) * t),
+                round(a.green() + (b.green() - a.green()) * t),
+                round(a.blue() + (b.blue() - a.blue()) * t),
+            )
+            colors[key] = blended.name()
+        return colors
+
+    def _apply_theme(self):
+        c = self._interpolated_colors()
+        self.setStyleSheet(
+            f"""
+            QWidget#appRoot {{ background-color: {c['bg']}; }}
+            QLabel {{ color: {c['text']}; font-family: 'Segoe UI'; }}
+            QLabel#muted {{ color: {c['muted']}; }}
+            QFrame#card {{ background-color: {c['card']}; border-radius: 24px; }}
+            QPushButton#primary {{
+                background-color: {c['accent']};
+                color: #FFFFFF;
+                border: none;
+                border-radius: 14px;
+            }}
+            QPushButton#primary:hover {{ background-color: {c['accent_hover']}; }}
+            QPushButton#secondary {{
+                background-color: {c['secondary']};
+                color: {c['accent']};
+                border: none;
+                border-radius: 12px;
+            }}
+            QPushButton#secondary:hover {{ background-color: {c['secondary_hover']}; }}
+            QPushButton#secondary:disabled {{
+                background-color: {c['secondary']};
+                color: {c['muted']};
+            }}
+            QLineEdit {{
+                background-color: {c['input_bg']};
+                border: 1px solid {c['input_border']};
+                border-radius: 12px;
+                color: {c['text']};
+                padding: 0 12px;
+                selection-background-color: {c['accent']};
+            }}
+            QLineEdit::placeholder {{ color: {c['placeholder']}; }}
+            QLabel#previewBox {{
+                background-color: {c['preview_bg']};
+                color: {c['muted']};
+                border-radius: 20px;
+            }}
+            """
         )
-        self.cover_label.pack(side="left", padx=(14, 0), fill="x", expand=True)
 
-        # Right card: preview
-        right_card = ctk.CTkFrame(
-            content,
-            width=320,
-            fg_color=COLORS["card"],
-            corner_radius=24,
-            border_width=0,
-        )
-        right_card.pack(side="right", fill="y")
-        right_card.pack_propagate(False)
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        self.theme_button.setText("Light Mode" if self.dark_mode else "Dark Mode")
 
-        right_inner = ctk.CTkFrame(right_card, fg_color="transparent")
-        right_inner.pack(fill="both", expand=True, padx=28, pady=28)
-
-        ctk.CTkLabel(
-            right_inner,
-            text="Cover art",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
-            text_color=COLORS["text"],
-        ).pack(anchor="w")
-
-        ctk.CTkLabel(
-            right_inner,
-            text="Preview the image before saving it to the MP3.",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color=COLORS["muted"],
-            wraplength=250,
-            justify="left",
-        ).pack(anchor="w", pady=(6, 18))
-
-        self.preview_box = ctk.CTkFrame(
-            right_inner,
-            width=260,
-            height=260,
-            corner_radius=20,
-            fg_color=COLORS["preview_bg"],
-            border_width=0,
-        )
-        self.preview_box.pack()
-        self.preview_box.pack_propagate(False)
-
-        self.preview_label = ctk.CTkLabel(
-            self.preview_box,
-            text="No cover art\n\nSelect an image\nto preview it here",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color=COLORS["muted"],
-            justify="center",
-        )
-        self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
-
-        self.preview_hint = ctk.CTkLabel(
-            right_inner,
-            text="Existing cover art will appear here when you load an MP3.",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color=COLORS["muted"],
-            wraplength=250,
-            justify="left",
-        )
-        self.preview_hint.pack(anchor="w", pady=(14, 0))
+        if self._theme_animation is not None:
+            self._theme_animation.stop()
+        animation = QPropertyAnimation(self, b"themeProgress", self)
+        animation.setDuration(550)
+        animation.setStartValue(self._theme_progress)
+        animation.setEndValue(1.0 if self.dark_mode else 0.0)
+        animation.setEasingCurve(QEasingCurve.InOutCubic)
+        self._theme_animation = animation
+        animation.start()
 
     def set_preview(self, image_source, hint=None):
-        """Display an image in the preview box. image_source: path, bytes, or None."""
         if hint is not None:
-            self.preview_hint.configure(text=hint)
+            self.preview_hint.setText(hint)
 
         if image_source is None:
-            self.preview_image = None
-            self.preview_label.configure(
-                image=None,
-                text="No cover art\n\nSelect an image\nto preview it here",
+            self.preview_box.setPixmap(QPixmap())
+            self.preview_box.setText(
+                "No cover art\n\nSelect an image\nto preview it here"
             )
             return
 
         try:
             if isinstance(image_source, (bytes, bytearray)):
-                img = Image.open(io.BytesIO(image_source))
+                pixmap = QPixmap()
+                if not pixmap.loadFromData(bytes(image_source)):
+                    raise ValueError("could not decode image")
             else:
-                img = Image.open(image_source)
-
-            img = img.copy()
-            # Fit within the preview area while preserving aspect ratio
-            max_w, max_h = 240, 240
-            img.thumbnail((max_w, max_h), pick_resample())
-            w, h = img.size
-
-            self.preview_image = ctk.CTkImage(light_image=img, dark_image=img, size=(w, h))
-            self.preview_label.configure(image=self.preview_image, text="")
+                pixmap = QPixmap(image_source)
+            if pixmap.isNull():
+                raise ValueError("could not load image")
+            pixmap = pixmap.scaled(
+                240, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            self.preview_box.setPixmap(pixmap)
+            self.preview_box.setText("")
         except Exception:
-            self.preview_image = None
-            self.preview_label.configure(image=None, text="Could not load image")
+            self.preview_box.setPixmap(QPixmap())
+            self.preview_box.setText("Could not load image")
 
     def choose_mp3(self):
-        path = filedialog.askopenfilename(
-            title="Select an MP3 file",
-            filetypes=[("MP3 files", "*.mp3"), ("All files", "*.*")],
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select an MP3 file", "", "MP3 files (*.mp3);;All files (*.*)"
         )
         if not path:
             return
 
         self.mp3_path = path
-        self.cover_path = ""  # clear any previously selected new cover
-        self.choose_image_btn.configure(state="normal")
-
-        self.mp3_label.configure(text=os.path.basename(path), text_color=COLORS["text"])
-        self.cover_label.configure(text="Cover unchanged on save", text_color=COLORS["muted"])
+        self.cover_path = ""
+        self.choose_image_btn.setEnabled(True)
+        self.mp3_label.setText(os.path.basename(path))
+        self.cover_label.setText("Cover unchanged on save")
         self.load_tags()
-        self.status_var.set(f"Loaded: {os.path.basename(path)}")
+        self.status_label.setText(f"Loaded: {os.path.basename(path)}")
 
     def load_tags(self):
         for entry in self.entries.values():
-            entry.delete(0, "end")
+            entry.clear()
 
-        self.set_preview(None, hint="Existing cover art will appear here when you load an MP3.")
+        self.set_preview(
+            None, hint="Existing cover art will appear here when you load an MP3."
+        )
 
         try:
             tags = ID3(self.mp3_path)
         except ID3NoHeaderError:
             return
 
-        self.entries["title"].insert(0, get_tag_text(tags, "TIT2"))
-        self.entries["artist"].insert(0, get_tag_text(tags, "TPE1"))
-        self.entries["album"].insert(0, get_tag_text(tags, "TALB"))
+        self.entries["title"].setText(get_tag_text(tags, "TIT2"))
+        self.entries["artist"].setText(get_tag_text(tags, "TPE1"))
+        self.entries["album"].setText(get_tag_text(tags, "TALB"))
 
         apics = tags.getall("APIC")
         if apics:
-            self.set_preview(apics[0].data, hint="Showing cover art embedded in this MP3.")
+            self.set_preview(
+                apics[0].data, hint="Showing cover art embedded in this MP3."
+            )
 
     def choose_image(self):
         if not self.mp3_path:
-            messagebox.showerror("No file selected", "Please choose an MP3 file first.")
+            QMessageBox.critical(self, "No file selected", "Please choose an MP3 file first.")
             return
 
-        path = filedialog.askopenfilename(
-            title="Select a cover image",
-            filetypes=[("Image files", "*.jpg *.jpeg *.png"), ("All files", "*.*")],
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select a cover image",
+            "",
+            "Image files (*.jpg *.jpeg *.png);;All files (*.*)",
         )
         if not path:
             return
 
         self.cover_path = path
-        self.cover_label.configure(text=os.path.basename(path), text_color=COLORS["text"])
+        self.cover_label.setText(os.path.basename(path))
         self.set_preview(path, hint="New cover selected. Click Save Metadata to embed it.")
-        self.status_var.set(f"Cover selected: {os.path.basename(path)}")
+        self.status_label.setText(f"Cover selected: {os.path.basename(path)}")
 
     def save(self):
         if not self.mp3_path:
-            messagebox.showerror("No file selected", "Please choose an MP3 file first.")
+            QMessageBox.critical(self, "No file selected", "Please choose an MP3 file first.")
             return
 
         try:
@@ -364,41 +403,36 @@ class MP3TagEditor:
             except ID3NoHeaderError:
                 tags = ID3()
 
-            tags["TIT2"] = TIT2(encoding=3, text=[self.entries["title"].get().strip()])
-            tags["TPE1"] = TPE1(encoding=3, text=[self.entries["artist"].get().strip()])
-            tags["TALB"] = TALB(encoding=3, text=[self.entries["album"].get().strip()])
+            tags["TIT2"] = TIT2(encoding=3, text=[self.entries["title"].text().strip()])
+            tags["TPE1"] = TPE1(encoding=3, text=[self.entries["artist"].text().strip()])
+            tags["TALB"] = TALB(encoding=3, text=[self.entries["album"].text().strip()])
 
-            # Only embed a new cover if the user selected one
             if self.cover_path:
                 ext = os.path.splitext(self.cover_path)[1].lower()
                 mime = "image/png" if ext == ".png" else "image/jpeg"
-                with open(self.cover_path, "rb") as img_file:
-                    image_data = img_file.read()
-
+                with open(self.cover_path, "rb") as image_file:
+                    image_data = image_file.read()
                 tags.delall("APIC")
                 tags.add(
                     APIC(
-                        encoding=3,  # UTF-8
+                        encoding=3,
                         mime=mime,
-                        type=3,      # front cover
+                        type=3,
                         desc="Cover",
                         data=image_data,
                     )
                 )
 
             tags.save(self.mp3_path)
-            self.status_var.set("Metadata saved successfully.")
-            messagebox.showinfo("Saved", "Metadata saved successfully.")
-
-        except Exception as e:
-            self.status_var.set("Save failed.")
-            messagebox.showerror("Error", f"Failed to save metadata:\n{e}")
+            self.status_label.setText("Metadata saved successfully.")
+            QMessageBox.information(self, "Saved", "Metadata saved successfully.")
+        except Exception as exc:
+            self.status_label.setText("Save failed.")
+            QMessageBox.critical(self, "Error", f"Failed to save metadata:\n{exc}")
 
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("light")
-    ctk.set_default_color_theme("blue")
-
-    root = ctk.CTk()
-    MP3TagEditor(root)
-    root.mainloop()
+    app = QApplication([])
+    window = MP3TagEditor()
+    window.show()
+    app.exec()
