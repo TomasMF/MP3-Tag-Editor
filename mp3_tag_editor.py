@@ -65,7 +65,7 @@ class MP3TagEditor(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MP3 Tag Editor")
-        self.setFixedSize(980, 700)
+        self.setFixedWidth(980)
         self.setObjectName("appRoot")
         self.setAttribute(Qt.WA_StyledBackground, True)
 
@@ -100,13 +100,7 @@ class MP3TagEditor(QWidget):
 
         title = QLabel("MP3 Tag Editor")
         title.setFont(QFont("Segoe UI", 22, QFont.Bold))
-        subtitle = QLabel(
-            "Update song details and cover art with a simple, clean interface."
-        )
-        subtitle.setFont(QFont("Segoe UI", 10))
-        subtitle.setObjectName("muted")
         heading_box.addWidget(title)
-        heading_box.addWidget(subtitle)
         header.addLayout(heading_box, 1)
 
         self.theme_button = QPushButton("Dark Mode")
@@ -181,7 +175,6 @@ class MP3TagEditor(QWidget):
         image_row.addWidget(self.choose_image_btn)
         image_row.addWidget(self.cover_label, 1)
         left_layout.addLayout(image_row)
-        left_layout.addStretch(1)
 
         content.addWidget(left_card, 1)
 
@@ -218,10 +211,9 @@ class MP3TagEditor(QWidget):
         self.preview_hint.setWordWrap(True)
         right_layout.addSpacing(14)
         right_layout.addWidget(self.preview_hint)
-        right_layout.addStretch(1)
 
         content.addWidget(right_card, 0)
-        root_layout.addLayout(content, 1)
+        root_layout.addLayout(content)
         root_layout.addSpacing(22)
 
         bottom = QHBoxLayout()
@@ -238,6 +230,9 @@ class MP3TagEditor(QWidget):
         root_layout.addLayout(bottom)
 
         self.set_preview(None)
+        # Fit the window snugly around the content instead of leaving
+        # empty space at the bottom of the cards.
+        self.setFixedHeight(self.sizeHint().height())
 
     def _interpolated_colors(self):
         t = self._theme_progress
