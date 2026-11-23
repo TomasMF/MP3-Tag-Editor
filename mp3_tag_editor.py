@@ -1,4 +1,9 @@
 import os
+import sys
+
+# On Linux, use the desktop's native (GTK) file dialogs instead of Qt's own.
+if sys.platform.startswith("linux") and not os.environ.get("QT_QPA_PLATFORMTHEME"):
+    os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
 
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt
 from PySide6.QtGui import QColor, QFont, QPixmap
